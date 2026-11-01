@@ -65,6 +65,15 @@ function makeDeps(request: PendingRequest | null) {
     },
     // reloj del busy-wait: avanza por llamada (si el spin no girara, no pasa el tiempo)
     wall: () => (wallT += 1000),
+    // Los escenarios de NaN no se ejercitan acá: dependencias inertes.
+    nan: {
+      fetchImpl: (async () => ({ ok: false, status: 0, body: null })) as never,
+      almacenKey: { leer: async () => null, guardar: async () => {}, borrar: async () => {} },
+      streamPiAi: (() => {
+        throw new Error("nan no inyectado en este test");
+      }) as never,
+      reloj: { ahora: () => new Date(0), zona: () => "UTC" },
+    },
   };
 
   return {

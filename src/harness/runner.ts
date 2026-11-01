@@ -23,6 +23,9 @@
  */
 
 import { errInfo, makeRecorder, type Ev } from "./record.ts";
+import { nanScenarios, relojDelSistema, type NanDeps } from "./scenarios-nan.ts";
+import { crearMemoriaKey } from "../nan/key.ts";
+import type { StreamPiAi } from "../nan/cliente.ts";
 import { VioletaObs, type VioletaObsModule } from "./obs.ts";
 
 // ---------------------------------------------------------------------------
@@ -64,6 +67,11 @@ export interface RunnerDeps {
   wall(): number;
   /** Espera cooperativa entre fases (default `setTimeout`). */
   sleep(ms: number): Promise<void>;
+  /**
+   * Dependencias del motor NaN (A9). La app las completa con `expo/fetch`, el
+   * almacén seguro y el adaptador real de pi-ai; los tests inyectan dobles.
+   */
+  nan: NanDeps;
 }
 
 export function defaultDeps(): RunnerDeps {
@@ -72,6 +80,16 @@ export function defaultDeps(): RunnerDeps {
     mono: () => VioletaObs.mono(),
     wall: () => Date.now(),
     sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    // Sin dispositivo: almacén vacío, sin fetch real y un stream que falla si
+    // alguien intenta usarlo. La app reemplaza las tres cosas en `App.tsx`.
+    nan: {
+      fetchImpl: globalThis.fetch as unknown as NanDeps["fetchImpl"],
+      almacenKey: crearMemoriaKey(null),
+      streamPiAi: ((() => {
+        throw new Error("streamPiAi no inyectado: la app debe pasar el adaptador de pi-ai");
+      }) as unknown) as StreamPiAi,
+      reloj: relojDelSistema(),
+    },
   };
 }
 
@@ -144,7 +162,7 @@ function busyWait(ms: number, wall: () => number): void {
 
 /** Resultado del escenario: "ok" cierra con veredicto; "dying" no emite veredicto propio. */
 type ScenarioOutcome = "ok" | "dying";
-type ScenarioFn = (ctx: ScenarioCtx) => Promise<ScenarioOutcome>;
+export type ScenarioFn = (ctx: ScenarioCtx) => Promise<ScenarioOutcome>;
 
 const SCENARIOS: Record<string, ScenarioFn> = {
   "selftest.ok": async (ctx) => {
@@ -259,7 +277,8 @@ export async function runHeadlessOnce(deps: RunnerDeps = defaultDeps()): Promise
       hardKill: () => deps.obs.hardKill(),
     };
 
-    const escenario = SCENARIOS[request.scenario];
+    // A9: los escenarios de NaN se esparcen acá; el driver no cambia.
+    const escenario = { ...SCENARIOS, ...nanScenarios(deps.nan) }[request.scenario];
     if (escenario === undefined) {
       throw new Error(`escenario desconocido: ${JSON.stringify(request.scenario)}`);
     }

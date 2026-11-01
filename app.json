@@ -16,6 +16,9 @@
       "predictiveBackGestureEnabled": false,
       "package": "dev.tasio.violeta"
     },
-    "web": {}
+    "web": {},
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }

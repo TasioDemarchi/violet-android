@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@earendil-works/pi-ai": "^1.4.0",
     "expo": "~58.0.22",
+    "expo-secure-store": "~58.0.2",
     "expo-status-bar": "~58.0.4",
     "react": "19.3.0",
     "react-native": "0.88.1"
@@ -17,7 +19,8 @@
     "android": "expo run:android",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.ts",
-    "build:debug": "cd android && ./gradlew :app:assembleDebug"
+    "build:debug": "cd android && ./gradlew :app:assembleDebug",
+    "postinstall": "node scripts/patch-pi-ai.mjs"
   },
   "private": true
 }
