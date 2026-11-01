@@ -339,9 +339,11 @@ async function main(): Promise<number> {
       if (res.code !== 0 || res.stdout.length === 0) return [];
       // `exec-out` mezcla el stderr del device en stdout: mientras el archivo
       // todavía no existe (primeros cientos de ms de la corrida) llega texto
-      // como "tail: files/runs/...: No such file". El offset avanza por los
-      // bytes crudos leídos (así el próximo tail no los repite) y sólo las
-      // líneas que empiezan con `{` se parsean como registros.
+      // como "tail: files/runs/...: No such file". Si el poll NO trae ni una
+      // línea de registro, es un error de transporte disfrazado: no se toca
+      // el offset (si se avanzara, el próximo `tail -c +N` se saltearía bytes
+      // reales del archivo y se perdería evidencia).
+      if (!res.stdout.split("\n").some((l) => l.startsWith("{"))) return [];
       lectura.offset += Buffer.byteLength(res.stdout, "utf8");
       const combinado = lectura.pending + res.stdout;
       const ultimoNl = combinado.lastIndexOf("\n");
@@ -353,7 +355,14 @@ async function main(): Promise<number> {
       lectura.pending = combinado.slice(ultimoNl + 1);
       const lineas = completo.split("\n").filter((l) => l.startsWith("{"));
       if (lineas.length === 0) return [];
-      return parseNdjson(lineas.join("\n") + "\n");
+      try {
+        return parseNdjson(lineas.join("\n") + "\n");
+      } catch (err) {
+        // Un registro corrupto no puede tumbar al driver: se avisa y se sigue,
+        // así la corrida igual termina con línea final y exit code.
+        console.error(`violeta-run: registro ilegible en ${archivo}: ${(err as Error).message}`);
+        return [];
+      }
     };
 
     const logLectura: Lectura = { offset: 0, pending: "" };
@@ -368,12 +377,20 @@ async function main(): Promise<number> {
     // Review punto 4: estado de pidof entre polls.
     let pidVaciosConfirmados = 0;
     let pidDesconocidoDesde: number | null = null;
+    // Fallos consecutivos leyendo heartbeat.ndjson (ver fila 5 de A8).
+    let lecturaHbEnFallo = 0;
 
     const deadline = inicioAmStart + args.timeout * 1000;
 
     while (true) {
-      logRegs.push(...(await leerIncremental("log.ndjson", logLectura)));
-      hbRegs.push(...(await leerIncremental("heartbeat.ndjson", hbLectura)));
+      const nuevosLog = await leerIncremental("log.ndjson", logLectura);
+      const nuevosHb = await leerIncremental("heartbeat.ndjson", hbLectura);
+      logRegs.push(...nuevosLog);
+      // Una lectura de heartbeat que falla no puede producir un `wedged
+      // razon=process` falso: se cuenta como fallo y, mientras persista, las
+      // filas 5 y 6 quedan sin decidir en ese poll.
+      lecturaHbEnFallo = nuevosHb.length === 0 ? lecturaHbEnFallo + 1 : 0;
+      hbRegs.push(...nuevosHb);
 
       // verdict.json (A12: O_EXCL, primero que escribe gana → una vez hallado,
       // no se vuelve a leer). Si el cat falla, está ausente: no es error fatal.
@@ -463,10 +480,15 @@ async function main(): Promise<number> {
         }),
       );
 
-      // La corrida terminó cuando classify puede decidir. Sin ancla de reloj
-      // o con pid desconocido no corresponde clasificar (salvo deadline
-      // agotado con pid confirmable, en marcha: seguir pollendo).
-      if (!pidDesconocido && (ahoraMono !== null || timeoutAgotado)) {
+      // La corrida terminó cuando classify puede decidir. Las filas 1 y 2 de
+      // A8 dependen SÓLO del veredicto: si ya se leyó, se clasifica sin
+      // esperar pid ni ancla (si no, un pidof roto o un clock perdido
+      // convertirían un veredicto en mano en `env`/`timeout`). Para las filas
+      // 3-7 hacen falta el ancla (o el deadline) y una lectura de heartbeat
+      // sana: un fallo de lectura no puede fabricar un `wedged razon=process`.
+      const puedoClasificar =
+        verdict !== null || (!pidDesconocido && (ahoraMono !== null || timeoutAgotado));
+      if (puedoClasificar) {
         const obs: Observacion = {
           precondicion: null,
           verdict,
@@ -474,9 +496,13 @@ async function main(): Promise<number> {
           clockT,
           jsBoot,
           pidVivo,
-          ultimoHbT: ultimoHb ? asNumero(ultimoHb.mono) : null,
+          // Sin lectura reciente de heartbeat no se conoce la edad del latido:
+          // se pasa null (fila 5 no decide) en vez de dejar que un fallo de
+          // lectura fabrique un `wedged razon=process`. Nunca bloquea la
+          // clasificación: `dead` y `timeout` siguen disponibles.
+          ultimoHbT: lecturaHbEnFallo === 0 && ultimoHb ? asNumero(ultimoHb.mono) : null,
           ultimoJsSeq: ultimoJs ? asNumero(ultimoJs.seq) : null,
-          ultimoJsSeqT: ultimoJs ? asNumero(ultimoJs.mono) : null,
+          ultimoJsSeqT: lecturaHbEnFallo === 0 && ultimoJs ? asNumero(ultimoJs.mono) : null,
           timeoutAgotado,
         };
         let resultado: { estado: Estado; razon: string } | null = null;

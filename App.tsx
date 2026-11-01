@@ -10,6 +10,10 @@ export default function App() {
     // Diagnóstico del arnés: sin módulo nativo no hay artefactos posibles.
     // Sale por logcat (tag ReactNativeJS) porque el archivo aún no existe.
     console.log(`[violeta] native_available=${isNativeAvailable()} error_utils=${typeof (globalThis as { ErrorUtils?: unknown }).ErrorUtils}`);
+    // Requisito 6: un Error de JS fuera del dispatcher (render, promesa
+    // rechazada) no llega al handler nativo — RN lo intercepta con ErrorUtils.
+    // Este handler escribe js_error + veredicto crash antes de delegar.
+    installGlobalErrorHandler();
     // Arnés headless (T5): toma el request pendiente del módulo nativo y corre
     // el escenario. Sin request (arranque manual desde el launcher) es un no-op.
     // Review punto 6: el .catch es el último intento de artefacto — si el
